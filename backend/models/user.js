@@ -37,8 +37,9 @@ const userSchema = new mongoose.Schema(
         type: String,
         default:"user",
         required: true,
-    }
-
+    },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date
     },
     {
         timestamps: true, // createdAt ve updatedAt otomatik ekler

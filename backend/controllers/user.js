@@ -2,12 +2,18 @@ const mongoose = require("mongoose");
 const User=require("../models/user.js")
 const bcrypt=require("bcryptjs")
 const jwt = require("jsonwebtoken");
-
-
-
+const cloudinary=require("cloudinary").v2
+const crypto=require("crypto")
+const nodemailer = require('nodemailer');
 
 
 const  register=async(req,res)=>{
+
+  const avatar=await cloudinary.uploader.upload(req.body.avatar,{
+    folder:"avatars",
+    width: 130 ,
+    crop:"scale"
+  })
   
     const {name,email,password}=req.body;
       
@@ -33,6 +39,10 @@ const  register=async(req,res)=>{
     name,
     email,
     password:passwordHash,
+    avatar:{
+      public_id:avatar.public_id,
+      url:avatar.secure_url
+    }
   })
 
    // JWT oluştur
@@ -88,22 +98,116 @@ const login=async(req,res)=>{
 
 
 const logout=async(req,res)=>{
-    
+
+  const cookieOptions={
+    httpOnly:true,
+    expires: new Date(Date.now())
+
+  }
+    res.status(200).cookie("token",null,cookieOptions).json({
+      message:"Çıkış işlemi başarılı"
+    })
 }
 
 
 
 
 const forgotPassword=async(req,res)=>{
-    
+    const user=await User.findOne({email:req.body.email})
+
+    if(!user){
+      return res.status(500).json({message:"Böyle bir kullanıcı bulunamadı"})
+    }
+
+    const resetToken=crypto.randomBytes(20).toString("hex")
+
+    user.resetPasswordToken=crypto.createHash('sha256').update(resetToken).digest('hex');
+
+  user.resetPasswordExpire =Date.now() + 1000 * 60 * 15 ;
+
+  await user.save({validateBeforeSave:false});
+
+ 
+  const passwordUrl= `${protocol}://${req.get("host")}/reset/${resetToken}`
+
+ const message=`Şifreni sıfırlamak için kullanıcıya token:${passwordUrl}`
+
+try{
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    service:"gmail",
+    port: 465,
+    auth: {
+      user: "your_email@gmail.com",
+      pass: "your_app_password",
+    },
+    secure:true,
+  });
+
+  const mailData = {
+    from: "your_email@gmail.com",
+    to: req.body.email,
+    subject: "Şifre sıfırlama",
+    text: "message",
+  };
+
+  await transporter.sendMail(mailData)
+
+  res.status(200).json({message:"mailinizi kontrol ediniz"})
+
+}catch(error){
+  user.resetPasswordToken=undefined
+  user.resetPasswordExpire=undefined
+
+  await user.save({validateBeforeSave:false})
+
+  res.status(500).json({message:error.message})
 }
 
 
+};
 
 
-const resetPassword=async(req,res)=>{
-    
-}
+
+
+
+const resetPassword = async (req, res) => {
+  const { token } = req.params;
+  const { newPassword } = req.body;
+
+  if (!token || !newPassword) {
+    return res.status(400).json({ message: "Eksik bilgi gönderildi." });
+  }
+
+  try {
+    // Gelen token'ı hashleyelim, çünkü DB'de hash olarak tutuluyor
+    const hashedToken = crypto.createHash("sha256").update(token).digest("hex");
+
+    // Token ve süresi geçmemiş user bulalım
+    const user = await User.findOne({
+      resetPasswordToken: hashedToken,
+      resetPasswordExpire: { $gt: Date.now() }
+    });
+
+    if (!user) {
+      return res.status(400).json({ message: "Token geçersiz veya süresi dolmuş." });
+    }
+
+    // Yeni şifreyi hashle
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Şifreyi güncelle ve token bilgilerini sıfırla
+    user.password = hashedPassword;
+    user.resetPasswordToken = undefined;
+    user.resetPasswordExpire = undefined;
+
+    await user.save();
+
+    res.status(200).json({ message: "Şifre başarıyla güncellendi." });
+  } catch (error) {
+    res.status(500).json({ message: "Sunucu hatası", error: error.message });
+  }
+};
 
 
 module.exports={ register,login,logout,forgotPassword,resetPassword}
